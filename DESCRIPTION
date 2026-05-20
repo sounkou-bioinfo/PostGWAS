@@ -1,0 +1,29 @@
+Package: PostGWAS
+Type: Package
+Title: African-Ancestry-First Post-GWAS Utilities with PLINK2 PGEN Support
+Version: 0.0.0.9000
+Authors@R: c(
+    person(given = "Sounkou Mahamane", family = "Toure",
+           email = "sounkoutoure@gmail.com", role = c("aut", "cre")),
+    person(given = "Donghyung", family = "Lee",
+           email = "leed13@miamioh.edu", role = c("ctb"),
+           comment = "Original GAUSS summary-statistic methods")
+    )
+Description: African-ancestry-first post-GWAS utilities for working directly
+    with PLINK2 '.pgen', '.pvar', and '.psam' reference panels. Provides
+    population-aware keep-file derivation from '.psam' metadata, native
+    'pgenlibr'-backed population-weighted LD estimation, and summary-statistic
+    imputation workflows that avoid package-specific intermediate genotype files.
+License: GPL (>= 2)
+Depends:
+    R (>= 4.0.0),
+    GAUSS.pgen
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Suggests:
+    pgenlibr
+Remotes:
+    sounkou-bioinfo/gauss
+URL: https://github.com/sounkou-bioinfo/PostGWAS
+BugReports: https://github.com/sounkou-bioinfo/PostGWAS/issues
