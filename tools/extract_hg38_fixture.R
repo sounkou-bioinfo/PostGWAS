@@ -79,6 +79,8 @@ cmd <- c(
   "--from-bp", as.character(from_bp),
   "--to-bp", as.character(to_bp),
   "--keep", shQuote(keep_file),
+  "--max-alleles", "2",
+  "--snps-only", "just-acgt",
   "--make-pgen", "vzs",
   "--out", shQuote(out_prefix)
 )

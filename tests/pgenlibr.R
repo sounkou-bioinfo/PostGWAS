@@ -180,5 +180,105 @@ if (requireNamespace("pgenlibr", quietly = TRUE)) {
       GAUSS.pgen:::.gauss_read_sumstats_z(flip_file, 22, sumstats$bp[1], sumstats$bp[1])
     )
     stopifnot(identical(as.numeric(matched), -9.25))
+
+    # End-to-end conformance: convert this real PLINK2 fixture to the legacy
+    # GAUSS reference format on the fly, then compare overlapping outputs.
+    if (nzchar(Sys.which("bgzip"))) {
+      make_gauss_ref <- function(out_dir) {
+        pops <- unique(psam_tab$Population)
+        pop_desc <- data.frame(
+          pop = pops,
+          num_subj = as.integer(table(factor(psam_tab$Population, levels = pops))),
+          sup_pop = vapply(pops, function(p) psam_tab$SuperPop[match(p, psam_tab$Population)], character(1)),
+          stringsAsFactors = FALSE
+        )
+        pop_file <- file.path(out_dir, "pop_desc.txt")
+        write.table(pop_desc, pop_file, quote = FALSE, row.names = FALSE)
+
+        all_idx <- seq_len(nvar)
+        G <- pgenlibr::ReadIntList(pgen, all_idx)
+        geno_txt <- file.path(out_dir, "geno.txt")
+        index_txt <- file.path(out_dir, "index.txt")
+        con <- file(geno_txt, "wb")
+        on.exit(if (inherits(con, "connection") && isOpen(con)) close(con), add = TRUE)
+        offsets <- numeric(length(all_idx))
+        for (jj in seq_along(all_idx)) {
+          offsets[[jj]] <- seek(con, where = NA)
+          geno_parts <- character(length(pops))
+          af_parts <- numeric(length(pops))
+          for (kk in seq_along(pops)) {
+            ii <- which(psam_tab$Population == pops[[kk]])
+            g <- G[ii, jj]
+            stopifnot(!anyNA(g))
+            geno_parts[[kk]] <- paste0(g, collapse = "")
+            af_parts[[kk]] <- mean(g) / 2
+          }
+          line <- paste(c(geno_parts, format(af_parts, scientific = FALSE, digits = 10)), collapse = " ")
+          writeBin(charToRaw(paste0(line, "\n")), con)
+        }
+        close(con)
+        con <- NULL
+        index <- data.frame(
+          rsid = vapply(all_idx, function(i) pgenlibr::GetVariantId(pvar, i), character(1)),
+          chr = vapply(all_idx, function(i) pgenlibr::GetVariantChrom(pvar, i), character(1)),
+          bp = vapply(all_idx, function(i) pgenlibr::GetVariantPos(pvar, i), integer(1)),
+          a1 = vapply(all_idx, function(i) pgenlibr::GetAlleleCode(pvar, i, 2L), character(1)),
+          a2 = vapply(all_idx, function(i) pgenlibr::GetAlleleCode(pvar, i, 1L), character(1)),
+          af1ref = 0,
+          fpos = offsets,
+          stringsAsFactors = FALSE
+        )
+        write.table(index, index_txt, quote = FALSE, row.names = FALSE, col.names = FALSE)
+        system2("bgzip", c("-f", geno_txt))
+        system2("bgzip", c("-f", index_txt))
+        list(
+          index = paste0(index_txt, ".gz"),
+          data = paste0(geno_txt, ".gz"),
+          pop = pop_file,
+          variants = index,
+          pops = pops
+        )
+      }
+
+      ref_dir <- tempfile("gauss-ref-")
+      dir.create(ref_dir)
+      legacy_ref <- make_gauss_ref(ref_dir)
+      legacy_wgt <- data.frame(pop = legacy_ref$pops, wgt = rep(1 / length(legacy_ref$pops), length(legacy_ref$pops)))
+
+      conf_input <- legacy_ref$variants[seq_len(40), c("rsid", "chr", "bp", "a1", "a2")]
+      conf_input$z <- seq_len(nrow(conf_input)) / 10
+      conf_file <- file.path(ref_dir, "conf_sumstats.txt")
+      write.table(conf_input, conf_file, quote = FALSE, row.names = FALSE)
+
+      ld_pgen <- computeLD_pgen(22, min(conf_input$bp), max(conf_input$bp), legacy_wgt,
+                                conf_file, pgen_file, pvar_file, psam_file,
+                                pop_col = "Population", af1_cutoff = -1)
+      ld_legacy <- computeLD(22, min(conf_input$bp), max(conf_input$bp), legacy_wgt,
+                             conf_file, legacy_ref$index, legacy_ref$data, legacy_ref$pop,
+                             af1_cutoff = -1)
+      common <- match(ld_pgen$snplist$rsid, ld_legacy$snplist$rsid)
+      stopifnot(!anyNA(common))
+      stopifnot(max(abs(ld_pgen$cormat - ld_legacy$cormat[common, common, drop = FALSE]), na.rm = TRUE) < 1e-10)
+
+      conf_input2 <- legacy_ref$variants[seq_len(30), c("rsid", "chr", "bp", "a1", "a2")]
+      conf_input2$z <- seq_len(nrow(conf_input2)) / 10
+      conf_file2 <- file.path(ref_dir, "conf_sumstats2.txt")
+      write.table(conf_input2, conf_file2, quote = FALSE, row.names = FALSE)
+      conf_start <- legacy_ref$variants$bp[[1]]
+      conf_end <- legacy_ref$variants$bp[[80]]
+      imp_pgen <- distmix_pgen(22, conf_start, conf_end, 0, legacy_wgt,
+                               conf_file2, pgen_file, pvar_file, psam_file,
+                               pop_col = "Population", af1_cutoff = -1)
+      imp_legacy <- distmix(22, conf_start, conf_end, 0, legacy_wgt,
+                            conf_file2, legacy_ref$index, legacy_ref$data, legacy_ref$pop,
+                            af1_cutoff = -1)
+      merged <- merge(imp_pgen, imp_legacy,
+                      by = c("rsid", "chr", "bp", "a1", "a2", "type"),
+                      suffixes = c(".pgen", ".legacy"))
+      stopifnot(nrow(merged) > 10)
+      finite <- is.finite(merged$z.pgen) & is.finite(merged$z.legacy)
+      stopifnot(max(abs(merged$z.pgen[finite] - merged$z.legacy[finite]), na.rm = TRUE) < 1e-8)
+      stopifnot(max(abs(merged$info.pgen[finite] - merged$info.legacy[finite]), na.rm = TRUE) < 1e-8)
+    }
   }
 }
